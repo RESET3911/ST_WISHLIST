@@ -10,7 +10,7 @@ import {
   subscribeRingiApplications,
   saveRingiApplication,
 } from './utils/storage';
-import { notifyRingiApply } from './utils/notify';
+import { notifyItemAdded, notifyRingiApply } from './utils/notify';
 import UserSelectScreen from './components/UserSelectScreen';
 import ListScreen from './components/ListScreen';
 import AddItemScreen from './components/AddItemScreen';
@@ -94,15 +94,18 @@ export default function App() {
     setScreen('add');
   };
 
-  const handleSaveItem = useCallback(async (item: WishItem) => {
+  const handleSaveItem = useCallback(async (item: WishItem, isNew: boolean) => {
     try {
       await saveWishItem(item);
+      if (isNew && currentUser) {
+        notifyItemAdded(item.name, item.price, currentUser, ringiSettings).catch(() => {});
+      }
       setSelectedItemId(item.id);
       setScreen('detail');
     } catch {
       setErrorToast('保存に失敗しました');
     }
-  }, []);
+  }, [currentUser, ringiSettings]);
 
   const handleDeleteItem = useCallback(async () => {
     if (!selectedItemId) return;
@@ -191,7 +194,7 @@ export default function App() {
         <AddItemScreen
           currentUser={currentUser}
           editItem={editItem}
-          onSave={handleSaveItem}
+          onSave={(item) => handleSaveItem(item, !editItemId)}
           onBack={() => setScreen(editItemId ? 'detail' : 'list')}
         />
       )}

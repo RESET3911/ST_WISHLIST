@@ -15,6 +15,23 @@ async function push(topic: string, title: string, body: string): Promise<void> {
   });
 }
 
+export async function notifyItemAdded(
+  itemName: string,
+  price: number | undefined,
+  adder: User,
+  settings: RingiSettings
+): Promise<void> {
+  const { ntfyTopic } = settings;
+  if (!ntfyTopic) return;
+  const adderName = adder === 'A' ? settings.userA.name : settings.userB.name;
+  const priceStr = price != null ? `\n金額: ¥${price.toLocaleString()}` : '';
+  await push(
+    ntfyTopic,
+    `✨ ウィッシュリストに追加: ${itemName}`,
+    `${adderName}が追加しました${priceStr}`
+  );
+}
+
 export async function notifyRingiApply(
   itemName: string,
   price: number | undefined,
