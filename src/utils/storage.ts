@@ -4,16 +4,29 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  getDoc,
   collection,
   onSnapshot,
+  query,
+  orderBy,
 } from 'firebase/firestore';
-import { WishItem, RingiApplication, RingiSettings } from '../types';
+import type { QuerySnapshot, DocumentData } from 'firebase/firestore';
+import {
+  WishItem,
+  RingiApplication,
+  RingiSettings,
+  Comparison,
+  CashflowIncome,
+  CashflowExpense,
+} from '../types';
 
 function stripUndefined<T extends object>(obj: T): Partial<T> {
   return Object.fromEntries(
     Object.entries(obj).filter(([, v]) => v !== undefined)
   ) as Partial<T>;
 }
+
+// ── WishItems ─────────────────────────────────────────────────────
 
 export async function saveWishItem(item: WishItem): Promise<void> {
   await setDoc(doc(db, 'wishlist', item.id), stripUndefined(item));
@@ -44,7 +57,8 @@ export function subscribeWishItems(
   );
 }
 
-// RINGIの設定（ユーザー名など）を読み込む
+// ── RINGI ─────────────────────────────────────────────────────────
+
 export function subscribeRingiSettings(
   callback: (settings: RingiSettings) => void
 ): () => void {
@@ -55,7 +69,6 @@ export function subscribeRingiSettings(
   });
 }
 
-// RINGIの申請一覧を監視（ステータス同期用）
 export function subscribeRingiApplications(
   callback: (apps: RingiApplication[]) => void,
   onError?: () => void
@@ -70,9 +83,70 @@ export function subscribeRingiApplications(
   );
 }
 
-// RINGIに申請を追加
 export async function saveRingiApplication(
   app: RingiApplication
 ): Promise<void> {
   await setDoc(doc(db, 'applications', app.id), stripUndefined(app));
+}
+
+// ── Comparisons ───────────────────────────────────────────────────
+
+export async function saveComparison(comparison: Comparison): Promise<void> {
+  await setDoc(doc(db, 'comparisons', comparison.id), comparison);
+}
+
+export async function getComparison(id: string): Promise<Comparison | null> {
+  const snap = await getDoc(doc(db, 'comparisons', id));
+  return snap.exists() ? (snap.data() as Comparison) : null;
+}
+
+// ── CASHFLOW連携（同一Firebaseプロジェクト）──────────────────────
+
+export function subscribeCashflowIncomes(
+  callback: (items: CashflowIncome[]) => void
+): () => void {
+  const q = query(collection(db, 'cashflow_incomes'), orderBy('invoiceDate', 'desc'));
+  return onSnapshot(
+    q,
+    (snap: QuerySnapshot<DocumentData>) => {
+      callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as CashflowIncome)));
+    },
+    () => callback([])
+  );
+}
+
+export function subscribeCashflowExpenses(
+  callback: (items: CashflowExpense[]) => void
+): () => void {
+  return onSnapshot(
+    collection(db, 'cashflow_expenses'),
+    (snap: QuerySnapshot<DocumentData>) => {
+      callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as CashflowExpense)));
+    },
+    () => callback([])
+  );
+}
+
+export function subscribeCashflowSavings(
+  callback: (amount: number) => void
+): () => void {
+  return onSnapshot(
+    doc(db, 'cashflow_settings', 'savings'),
+    snap => callback(snap.exists() ? ((snap.data().amount as number) ?? 0) : 0),
+    () => callback(0)
+  );
+}
+
+export function subscribeCashflowSafetyLine(
+  callback: (amount: number) => void
+): () => void {
+  return onSnapshot(
+    doc(db, 'cashflow_settings', 'safety'),
+    snap => callback(snap.exists() ? ((snap.data().safetyLine as number) ?? 500000) : 500000),
+    () => callback(500000)
+  );
+}
+
+export async function saveCashflowSafetyLine(amount: number): Promise<void> {
+  await setDoc(doc(db, 'cashflow_settings', 'safety'), { safetyLine: amount });
 }

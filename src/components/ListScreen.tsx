@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { User, WishItem, WishStatus, RingiSettings, Priority } from '../types';
+import { User, WishItem, WishStatus, RingiSettings, Priority, BuyCategory } from '../types';
+import { BUY_CATEGORY_LABELS, BUY_CATEGORY_COLORS } from '../utils/scoreUtils';
 
-type TabType = 'all' | 'mine' | 'partner';
+type OwnerTab = 'all' | 'mine' | 'partner';
+type CategoryTab = 'all' | BuyCategory;
 
 type Props = {
   currentUser: User;
@@ -10,6 +12,7 @@ type Props = {
   onSelectItem: (id: string) => void;
   onAddItem: () => void;
   onSwitchUser: () => void;
+  onCompare: (ids: string[]) => void;
 };
 
 const STATUS_LABELS: Record<WishStatus, string> = {
@@ -34,18 +37,20 @@ const PRIORITY_COLORS: Record<Priority, string> = {
   low: 'bg-gray-300',
 };
 
-const PRIORITY_LABELS: Record<Priority, string> = {
-  high: '高',
-  mid: '中',
-  low: '低',
-};
-
-const FILTER_OPTIONS: { value: WishStatus | 'all'; label: string }[] = [
+const STATUS_FILTER_OPTIONS: { value: WishStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'すべて' },
   { value: 'wishlist', label: '欲しい' },
   { value: 'pending', label: '申請中' },
   { value: 'approved', label: '承認済み' },
   { value: 'purchased', label: '購入済み' },
+];
+
+const CATEGORY_FILTER_OPTIONS: { value: CategoryTab; label: string }[] = [
+  { value: 'all', label: '全スコア' },
+  { value: 'buy_now', label: '🔥 今買うべき' },
+  { value: 'hold', label: '⏳ 保留' },
+  { value: 'wait_sale', label: '🏷️ セール待ち' },
+  { value: 'unnecessary', label: '💭 いらないかも' },
 ];
 
 export default function ListScreen({
@@ -55,9 +60,13 @@ export default function ListScreen({
   onSelectItem,
   onAddItem,
   onSwitchUser,
+  onCompare,
 }: Props) {
-  const [tab, setTab] = useState<TabType>('all');
+  const [tab, setTab] = useState<OwnerTab>('all');
   const [statusFilter, setStatusFilter] = useState<WishStatus | 'all'>('all');
+  const [categoryFilter, setCategoryFilter] = useState<CategoryTab>('all');
+  const [compareMode, setCompareMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const myName = currentUser === 'A' ? settings.userA.name : settings.userB.name;
   const partnerUser: User = currentUser === 'A' ? 'B' : 'A';
@@ -70,8 +79,17 @@ export default function ListScreen({
       return true;
     })
     .filter(item => statusFilter === 'all' || item.status === statusFilter)
+    .filter(item => {
+      if (categoryFilter === 'all') return true;
+      return item.buyCategory === categoryFilter;
+    })
     .sort((a, b) => {
-      // 優先度順 → 日付順
+      // スコアがある場合はスコア降順、なければ優先度 → 日付順
+      if (a.totalScore != null && b.totalScore != null) {
+        return b.totalScore - a.totalScore;
+      }
+      if (a.totalScore != null) return -1;
+      if (b.totalScore != null) return 1;
       const priorityOrder: Record<Priority, number> = { high: 0, mid: 1, low: 2 };
       if (priorityOrder[a.priority] !== priorityOrder[b.priority]) {
         return priorityOrder[a.priority] - priorityOrder[b.priority];
@@ -80,6 +98,19 @@ export default function ListScreen({
     });
 
   const pendingCount = wishItems.filter(i => i.status === 'pending').length;
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev =>
+      prev.includes(id)
+        ? prev.filter(x => x !== id)
+        : prev.length < 4 ? [...prev, id] : prev
+    );
+  };
+
+  const handleCompareModeToggle = () => {
+    setCompareMode(prev => !prev);
+    setSelectedIds([]);
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -100,6 +131,16 @@ export default function ListScreen({
               </span>
             )}
             <button
+              onClick={handleCompareModeToggle}
+              className={`text-xs font-medium px-3 py-1.5 rounded-full transition-colors ${
+                compareMode
+                  ? 'bg-primary-500 text-white'
+                  : 'bg-gray-100 text-gray-600'
+              }`}
+            >
+              比較
+            </button>
+            <button
               onClick={onSwitchUser}
               className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 active:bg-gray-200 transition-colors"
               aria-label="ユーザー切り替え"
@@ -111,12 +152,12 @@ export default function ListScreen({
           </div>
         </div>
 
-        {/* Tabs */}
+        {/* Owner Tabs */}
         <div className="max-w-lg mx-auto px-4 flex border-t border-gray-100">
           {[
-            { key: 'all' as TabType, label: 'すべて' },
-            { key: 'mine' as TabType, label: myName },
-            { key: 'partner' as TabType, label: partnerName },
+            { key: 'all' as OwnerTab, label: 'すべて' },
+            { key: 'mine' as OwnerTab, label: myName },
+            { key: 'partner' as OwnerTab, label: partnerName },
           ].map(t => (
             <button
               key={t.key}
@@ -134,8 +175,8 @@ export default function ListScreen({
       </div>
 
       {/* Status filter chips */}
-      <div className="max-w-lg mx-auto w-full px-4 py-3 flex gap-2 overflow-x-auto no-scrollbar">
-        {FILTER_OPTIONS.map(opt => (
+      <div className="max-w-lg mx-auto w-full px-4 pt-3 pb-1 flex gap-2 overflow-x-auto no-scrollbar">
+        {STATUS_FILTER_OPTIONS.map(opt => (
           <button
             key={opt.value}
             onClick={() => setStatusFilter(opt.value)}
@@ -150,8 +191,25 @@ export default function ListScreen({
         ))}
       </div>
 
+      {/* Buy-category filter chips */}
+      <div className="max-w-lg mx-auto w-full px-4 pb-2 flex gap-2 overflow-x-auto no-scrollbar">
+        {CATEGORY_FILTER_OPTIONS.map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => setCategoryFilter(opt.value)}
+            className={`flex-shrink-0 text-xs font-medium px-3 py-1.5 rounded-full transition-colors ${
+              categoryFilter === opt.value
+                ? 'bg-gray-700 text-white'
+                : 'bg-white text-gray-600 border border-gray-200'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
       {/* List */}
-      <div className="max-w-lg mx-auto w-full px-4 flex-1 pb-24">
+      <div className="max-w-lg mx-auto w-full px-4 flex-1 pb-28">
         {filtered.length === 0 ? (
           <div className="text-center py-16">
             <div className="text-5xl mb-4">✨</div>
@@ -160,65 +218,121 @@ export default function ListScreen({
           </div>
         ) : (
           <div className="space-y-3">
-            {filtered.map(item => (
-              <button
-                key={item.id}
-                onClick={() => onSelectItem(item.id)}
-                className="w-full bg-white rounded-2xl shadow-sm p-4 flex items-center gap-3 active:bg-gray-50 transition-colors text-left"
-              >
-                {/* Priority bar */}
-                <div className={`w-1.5 h-14 rounded-full flex-shrink-0 ${PRIORITY_COLORS[item.priority]}`} />
+            {filtered.map(item => {
+              const isSelected = selectedIds.includes(item.id);
+              return (
+                <div key={item.id} className="relative">
+                  {/* Compare checkbox overlay */}
+                  {compareMode && (
+                    <button
+                      onClick={() => toggleSelect(item.id)}
+                      className={`absolute left-3 top-1/2 -translate-y-1/2 z-10 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
+                        isSelected
+                          ? 'bg-primary-500 border-primary-500'
+                          : 'bg-white border-gray-300'
+                      }`}
+                      aria-label="比較に追加"
+                    >
+                      {isSelected && (
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-white" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      )}
+                    </button>
+                  )}
 
-                {/* Main content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="font-semibold text-gray-900 truncate">{item.name}</p>
-                    <span className={`flex-shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[item.status]}`}>
-                      {STATUS_LABELS[item.status]}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    {item.price != null && (
-                      <span className="text-sm font-medium text-gray-700">
-                        ¥{item.price.toLocaleString()}
-                      </span>
+                  <button
+                    onClick={() => compareMode ? toggleSelect(item.id) : onSelectItem(item.id)}
+                    className={`w-full bg-white rounded-2xl shadow-sm p-4 flex items-center gap-3 active:bg-gray-50 transition-colors text-left ${
+                      compareMode && isSelected ? 'ring-2 ring-primary-400' : ''
+                    } ${compareMode ? 'pl-12' : ''}`}
+                  >
+                    {/* Priority bar */}
+                    <div className={`w-1.5 h-14 rounded-full flex-shrink-0 ${PRIORITY_COLORS[item.priority]}`} />
+
+                    {/* Main content */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="font-semibold text-gray-900 truncate">{item.name}</p>
+                        <span className={`flex-shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[item.status]}`}>
+                          {STATUS_LABELS[item.status]}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        {item.price != null && (
+                          <span className="text-sm font-medium text-gray-700">
+                            ¥{item.price.toLocaleString()}
+                          </span>
+                        )}
+                        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                          {item.category}
+                        </span>
+                        {tab === 'all' && (
+                          <span className="text-xs text-primary-500 font-medium">
+                            {item.owner === 'A' ? settings.userA.name : settings.userB.name}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        {item.totalScore != null && (
+                          <span className="text-xs font-bold text-gray-700">
+                            {item.totalScore}点
+                          </span>
+                        )}
+                        {item.buyCategory && (
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${BUY_CATEGORY_COLORS[item.buyCategory]}`}>
+                            {BUY_CATEGORY_LABELS[item.buyCategory]}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Arrow */}
+                    {!compareMode && (
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-gray-300 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                      </svg>
                     )}
-                    <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
-                      {item.category}
-                    </span>
-                    {tab === 'all' && (
-                      <span className="text-xs text-primary-500 font-medium">
-                        {item.owner === 'A' ? settings.userA.name : settings.userB.name}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1 mt-1">
-                    <span className="text-xs text-gray-400">優先度:</span>
-                    <span className="text-xs font-medium text-gray-600">
-                      {PRIORITY_LABELS[item.priority]}
-                    </span>
-                  </div>
+                  </button>
                 </div>
-
-                {/* Arrow */}
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-gray-300 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                </svg>
-              </button>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
 
+      {/* Compare bar */}
+      {compareMode && selectedIds.length >= 2 && (
+        <div className="fixed bottom-20 left-0 right-0 flex justify-center z-20 px-4">
+          <div className="bg-gray-900 text-white rounded-2xl shadow-xl px-4 py-3 flex items-center gap-3 max-w-lg w-full">
+            <span className="text-sm font-medium flex-1">{selectedIds.length}件選択中（最大4件）</span>
+            <button
+              onClick={() => { setSelectedIds([]); }}
+              className="text-gray-400 text-xs px-2 py-1 rounded-lg active:bg-gray-700"
+            >
+              クリア
+            </button>
+            <button
+              onClick={() => onCompare(selectedIds)}
+              className="bg-primary-500 text-white text-sm font-bold px-4 py-2 rounded-xl active:bg-primary-700"
+            >
+              比較する →
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* FAB */}
-      <button
-        onClick={onAddItem}
-        className="fixed bottom-6 right-6 w-14 h-14 bg-primary-500 text-white rounded-full shadow-lg
-                   flex items-center justify-center text-3xl active:bg-primary-700 transition-colors z-10"
-        aria-label="アイテムを追加"
-      >
-        +
-      </button>
+      {!compareMode && (
+        <button
+          onClick={onAddItem}
+          className="fixed bottom-6 right-6 w-14 h-14 bg-primary-500 text-white rounded-full shadow-lg
+                     flex items-center justify-center text-3xl active:bg-primary-700 transition-colors z-10"
+          aria-label="アイテムを追加"
+        >
+          +
+        </button>
+      )}
     </div>
   );
 }

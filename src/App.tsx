@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { User, WishItem, RingiSettings, RingiApplication } from './types';
+import {
+  User, WishItem, RingiSettings, RingiApplication,
+  CashflowData, CashflowIncome, CashflowExpense,
+} from './types';
 import {
   saveWishItem,
   updateWishItem,
@@ -9,21 +12,62 @@ import {
   subscribeRingiSettings,
   subscribeRingiApplications,
   saveRingiApplication,
+  subscribeCashflowIncomes,
+  subscribeCashflowExpenses,
+  subscribeCashflowSavings,
+  subscribeCashflowSafetyLine,
 } from './utils/storage';
 import { notifyItemAdded, notifyRingiApply } from './utils/notify';
 import UserSelectScreen from './components/UserSelectScreen';
 import ListScreen from './components/ListScreen';
 import AddItemScreen from './components/AddItemScreen';
 import DetailScreen from './components/DetailScreen';
+import CompareScreen from './components/CompareScreen';
 import Toast from './components/Toast';
 
-type Screen = 'userSelect' | 'list' | 'add' | 'detail';
+type Screen = 'userSelect' | 'list' | 'add' | 'detail' | 'compare';
 
 const DEFAULT_SETTINGS: RingiSettings = {
   userA: { name: 'Aさん', email: '' },
   userB: { name: 'Bさん', email: '' },
   ntfyTopic: '',
 };
+
+function computeCashflowData(
+  incomes: CashflowIncome[],
+  expenses: CashflowExpense[],
+  savingsBalance: number,
+  safetyLine: number,
+): CashflowData {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  const thisMonthIncomes = incomes.filter(inc => {
+    const parts = inc.invoiceDate.split('-');
+    return parseInt(parts[0]) === currentYear && parseInt(parts[1]) === currentMonth;
+  });
+
+  const paidThisMonth = thisMonthIncomes
+    .filter(i => i.isPaid)
+    .reduce((s, i) => s + i.amount, 0);
+
+  const monthlyExpenses = expenses
+    .filter(e => e.isActive)
+    .reduce((s, e) => s + e.amount, 0);
+
+  const currentMonthSurplus = paidThisMonth - monthlyExpenses;
+
+  const unpaidIncome = incomes
+    .filter(i => !i.isPaid)
+    .reduce((s, i) => s + i.amount, 0);
+
+  const nextMonthFixedIncome = thisMonthIncomes
+    .filter(i => i.incomeType === 'fixed')
+    .reduce((s, i) => s + i.amount, 0);
+
+  return { currentMonthSurplus, unpaidIncome, safetyLine, savingsBalance, nextMonthFixedIncome };
+}
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -33,10 +77,21 @@ export default function App() {
   const [ringiApplications, setRingiApplications] = useState<RingiApplication[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editItemId, setEditItemId] = useState<string | null>(null);
+  const [compareItemIds, setCompareItemIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorToast, setErrorToast] = useState<string | null>(null);
 
-  // Firestore subscriptions
+  // CASHFLOW state
+  const [cashflowIncomes, setCashflowIncomes] = useState<CashflowIncome[]>([]);
+  const [cashflowExpenses, setCashflowExpenses] = useState<CashflowExpense[]>([]);
+  const [cashflowSavings, setCashflowSavings] = useState(0);
+  const [cashflowSafetyLine, setCashflowSafetyLine] = useState(500000);
+
+  const cashflowData = useMemo<CashflowData>(
+    () => computeCashflowData(cashflowIncomes, cashflowExpenses, cashflowSavings, cashflowSafetyLine),
+    [cashflowIncomes, cashflowExpenses, cashflowSavings, cashflowSafetyLine]
+  );
+
   useEffect(() => {
     const unsubWish = subscribeWishItems(
       items => { setWishItems(items); setLoading(false); },
@@ -47,27 +102,30 @@ export default function App() {
       apps => setRingiApplications(apps),
       () => {}
     );
-    return () => { unsubWish(); unsubSettings(); unsubApps(); };
+    const unsubCfIncomes = subscribeCashflowIncomes(setCashflowIncomes);
+    const unsubCfExpenses = subscribeCashflowExpenses(setCashflowExpenses);
+    const unsubCfSavings = subscribeCashflowSavings(setCashflowSavings);
+    const unsubCfSafety = subscribeCashflowSafetyLine(setCashflowSafetyLine);
+
+    return () => {
+      unsubWish(); unsubSettings(); unsubApps();
+      unsubCfIncomes(); unsubCfExpenses(); unsubCfSavings(); unsubCfSafety();
+    };
   }, []);
 
   // RINGIのステータス変化をウィッシュリストに同期
   useEffect(() => {
     if (ringiApplications.length === 0 || wishItems.length === 0) return;
-
     wishItems.forEach(item => {
       if (!item.ringiId || item.status !== 'pending') return;
       const ringiApp = ringiApplications.find(a => a.id === item.ringiId);
       if (!ringiApp) return;
-
       if (ringiApp.status === 'approved') {
-        updateWishItem(item.id, { status: 'approved', updatedAt: new Date().toISOString() })
-          .catch(() => {});
+        updateWishItem(item.id, { status: 'approved', updatedAt: new Date().toISOString() }).catch(() => {});
       } else if (ringiApp.status === 'rejected') {
-        updateWishItem(item.id, { status: 'rejected', updatedAt: new Date().toISOString() })
-          .catch(() => {});
+        updateWishItem(item.id, { status: 'rejected', updatedAt: new Date().toISOString() }).catch(() => {});
       } else if (ringiApp.status === 'cancelled') {
-        updateWishItem(item.id, { status: 'wishlist', ringiId: undefined, updatedAt: new Date().toISOString() })
-          .catch(() => {});
+        updateWishItem(item.id, { status: 'wishlist', ringiId: undefined, updatedAt: new Date().toISOString() }).catch(() => {});
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -153,6 +211,11 @@ export default function App() {
     }
   }, []);
 
+  const handleCompare = useCallback((ids: string[]) => {
+    setCompareItemIds(ids);
+    setScreen('compare');
+  }, []);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -173,10 +236,7 @@ export default function App() {
   return (
     <>
       {screen === 'userSelect' && (
-        <UserSelectScreen
-          settings={ringiSettings}
-          onSelect={handleSelectUser}
-        />
+        <UserSelectScreen settings={ringiSettings} onSelect={handleSelectUser} />
       )}
 
       {screen === 'list' && currentUser && (
@@ -187,6 +247,7 @@ export default function App() {
           onSelectItem={handleSelectItem}
           onAddItem={handleAddItem}
           onSwitchUser={() => { setCurrentUser(null); setScreen('userSelect'); }}
+          onCompare={handleCompare}
         />
       )}
 
@@ -205,12 +266,25 @@ export default function App() {
           currentUser={currentUser}
           settings={ringiSettings}
           ringiApp={ringiAppForSelected}
+          cashflowData={cashflowData}
           onBack={() => setScreen('list')}
           onEdit={handleEditItem}
           onDelete={handleDeleteItem}
           onRingiApply={handleRingiApply}
           onMarkPurchased={handleMarkPurchased}
           onRevertToWishlist={handleRevertToWishlist}
+        />
+      )}
+
+      {screen === 'compare' && currentUser && (
+        <CompareScreen
+          compareItemIds={compareItemIds}
+          wishItems={wishItems}
+          currentUser={currentUser}
+          settings={ringiSettings}
+          cashflowData={cashflowData}
+          onBack={() => setScreen('list')}
+          onRingiApply={handleRingiApply}
         />
       )}
 
